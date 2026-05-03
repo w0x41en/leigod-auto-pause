@@ -325,25 +325,162 @@ def _extract_process_names(value, out: set[str], depth: int = 0):
             _extract_process_names(item, out, depth + 1)
 
 
-def get_acc_processes(cdp: CDP) -> list[str]:
-    """Best-effort read of process names related to the currently accelerated item.
+def _extract_acc_state(value, statuses: set[str], game_ids: set[str], depth: int = 0):
+    if depth > 8 or value is None:
+        return
+    if isinstance(value, str):
+        if (value.startswith("{") and value.endswith("}")) or (value.startswith("[") and value.endswith("]")):
+            try:
+                _extract_acc_state(json.loads(value), statuses, game_ids, depth + 1)
+            except Exception:
+                pass
+        return
+    if isinstance(value, dict):
+        status = value.get("accStatus") or value.get("acc_status")
+        if isinstance(status, str) and status.strip():
+            statuses.add(status.strip())
+
+        game_id = value.get("game_id") or value.get("gameId")
+        if game_id is not None and str(game_id).strip():
+            game_ids.add(str(game_id).strip())
+
+        for child in value.values():
+            _extract_acc_state(child, statuses, game_ids, depth + 1)
+        return
+    if isinstance(value, list):
+        for item in value:
+            _extract_acc_state(item, statuses, game_ids, depth + 1)
+
+
+def _is_accelerating(statuses: set[str]) -> bool:
+    return any(status.lower() in {"speeding", "running"} for status in statuses)
+
+
+def _extract_acc_info_items(value, statuses: set[str], game_ids: set[str]):
+    items = value if isinstance(value, list) else [value]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        status = item.get("status")
+        if isinstance(status, str) and status.strip():
+            statuses.add(status.strip())
+        for game_id in (item.get("game_id"), item.get("gameId"), item.get("id")):
+            if game_id is not None and str(game_id).strip():
+                game_ids.add(str(game_id).strip())
+        option = item.get("option")
+        if isinstance(option, dict):
+            for game_id in (option.get("game_id"), option.get("gameId"), option.get("id")):
+                if game_id is not None and str(game_id).strip():
+                    game_ids.add(str(game_id).strip())
+
+
+def _read_indexeddb_game_processes(cdp: CDP, game_ids: set[str]) -> list:
+    if not game_ids:
+        return []
+    ids_json = json.dumps(sorted(game_ids), ensure_ascii=False)
+    js = f"""
+    (async () => {{
+        const ids = new Set({ids_json}.map(String));
+        const rows = [];
+        if (!window.indexedDB || !indexedDB.databases) return JSON.stringify(rows);
+        const dbs = await indexedDB.databases();
+        for (const info of dbs) {{
+            if (!info.name || !/^leigod_database_/i.test(info.name)) continue;
+            let db = null;
+            try {{
+                db = await new Promise((resolve, reject) => {{
+                    const req = indexedDB.open(info.name);
+                    req.onsuccess = () => resolve(req.result);
+                    req.onerror = () => reject(req.error);
+                }});
+                if (!db.objectStoreNames.contains("game_list")) continue;
+                const tx = db.transaction("game_list", "readonly");
+                const store = tx.objectStore("game_list");
+                const all = await new Promise((resolve, reject) => {{
+                    const req = store.getAll();
+                    req.onsuccess = () => resolve(req.result || []);
+                    req.onerror = () => reject(req.error);
+                }});
+                for (const row of all) {{
+                    if (row && ids.has(String(row.id))) rows.push(row);
+                }}
+            }} catch (_) {{
+            }} finally {{
+                try {{ if (db) db.close(); }} catch (_) {{}}
+            }}
+        }}
+        return JSON.stringify(rows);
+    }})()
+    """
+    raw = cdp.eval(js, timeout=15)
+    if not raw:
+        return []
+    try:
+        rows = json.loads(raw)
+        return rows if isinstance(rows, list) else []
+    except Exception:
+        return []
+
+
+def get_acc_snapshot(cdp: CDP) -> dict:
+    """Best-effort read of current acceleration state and related process names.
 
     This is intentionally read-only: it calls configuration/status-like IPC and
     inspects renderer localStorage. It does not start, stop, or switch timing.
     """
     names: set[str] = set()
+    statuses: set[str] = set()
+    game_ids: set[str] = set()
+    current_game_ids: set[str] = set()
+    attached = False
 
-    for channel in ("get-acc-config",):
+    for channel in ("get-acc-info", "get-acc-config"):
         try:
             result = cdp.invoke(channel, timeout=5)
+            attached = True
             if result.get("ok"):
-                _extract_process_names(result.get("data"), names)
+                data = result.get("data")
+                if channel == "get-acc-info":
+                    before = set(game_ids)
+                    _extract_acc_info_items(data, statuses, game_ids)
+                    current_game_ids.update(game_ids - before)
+                _extract_process_names(data, names)
+                _extract_acc_state(data, statuses, game_ids)
         except Exception:
             pass
 
     js = r"""
     (() => {
-        const out = { localStorage: {}, accLikeGlobals: {} };
+        const out = { localStorage: {}, accLikeGlobals: {}, accCandidates: [] };
+        const pick = (value, depth = 0) => {
+            if (!value || typeof value !== "object" || depth > 4) return null;
+            const item = {};
+            for (const key of [
+                "accInfo", "accStatus", "game_id", "gameId", "isAutoLaunch",
+                "game_process", "platform_process", "process_name", "processName",
+                "exe_name", "exeName", "exe", "process", "launch_path",
+                "launchPath", "manualLaunchPath", "path", "game_path", "gamePath"
+            ]) {
+                try {
+                    if (Object.prototype.hasOwnProperty.call(value, key)) item[key] = value[key];
+                } catch (_) {}
+            }
+            if (Object.keys(item).length) return item;
+            return null;
+        };
+        const scan = (value, depth = 0, seen = new WeakSet()) => {
+            if (!value || typeof value !== "object" || depth > 3 || seen.has(value)) return;
+            seen.add(value);
+            const item = pick(value, depth);
+            if (item) out.accCandidates.push(item);
+            let keys = [];
+            try { keys = Object.keys(value).slice(0, 80); } catch (_) { return; }
+            for (const key of keys) {
+                if (/acc|game|launch|process|status/i.test(key)) {
+                    try { scan(value[key], depth + 1, seen); } catch (_) {}
+                }
+            }
+        };
         try {
             for (let i = 0; i < localStorage.length; i++) {
                 const key = localStorage.key(i);
@@ -358,6 +495,7 @@ def get_acc_processes(cdp: CDP) -> list[str]:
                     const value = window[key];
                     if (value && typeof value === "object") {
                         try { out.accLikeGlobals[key] = JSON.parse(JSON.stringify(value)); } catch (_) {}
+                        try { scan(value); } catch (_) {}
                     }
                 }
             }
@@ -367,12 +505,29 @@ def get_acc_processes(cdp: CDP) -> list[str]:
     """
     try:
         raw = cdp.eval(js, timeout=5)
+        attached = True
         if raw:
-            _extract_process_names(json.loads(raw), names)
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                _extract_process_names(data.get("accCandidates"), names)
+            _extract_acc_state(data, statuses, game_ids)
     except Exception:
         pass
 
-    return sorted(names, key=str.lower)
+    if _is_accelerating(statuses):
+        try:
+            rows = _read_indexeddb_game_processes(cdp, current_game_ids or game_ids)
+            _extract_process_names(rows, names)
+        except Exception:
+            pass
+
+    return {
+        "attached": attached,
+        "accelerating": _is_accelerating(statuses),
+        "statuses": sorted(statuses, key=str.lower),
+        "game_ids": sorted(current_game_ids or game_ids, key=str.lower),
+        "processes": sorted(names, key=str.lower),
+    }
 
 
 # ─────────────────────────────────────────────
@@ -535,6 +690,7 @@ class WatchState:
         self.config_path = config_path
         self.prefer_acc_processes = prefer_acc_processes
         self._last_acc_processes: list[str] = []
+        self._last_acc_mode = False
         self._mtime = self._get_mtime()
 
     def _get_mtime(self):
@@ -583,15 +739,22 @@ class WatchState:
 
     def resolve_processes(self, cdp: CDP) -> list[str]:
         if self.prefer_acc_processes:
-            acc_processes = get_acc_processes(cdp)
-            if acc_processes:
+            snapshot = get_acc_snapshot(cdp)
+            acc_processes = snapshot["processes"]
+            use_acc_processes = snapshot["attached"] and snapshot["accelerating"] and bool(acc_processes)
+
+            if use_acc_processes:
                 if acc_processes != self._last_acc_processes:
                     print(f"  [{ts()}] 当前加速进程优先: {', '.join(acc_processes)}")
                     self._last_acc_processes = acc_processes
+                self._last_acc_mode = True
                 return acc_processes
-            if self._last_acc_processes:
-                print(f"  [{ts()}] 未读到当前加速进程，回退到配置进程")
+
+            if self._last_acc_mode:
+                status_text = ",".join(snapshot["statuses"]) if snapshot["statuses"] else "unknown"
+                print(f"  [{ts()}] 当前未确认加速中(status={status_text})，使用配置进程")
                 self._last_acc_processes = []
+                self._last_acc_mode = False
         return list(self.processes)
 
 
