@@ -23,13 +23,12 @@ import socket
 import subprocess
 import sys
 import time
-import urllib.request
 import ctypes
 
 try:
-    from curl_cffi import requests as curl_requests
+    import requests
 except ImportError:
-    curl_requests = None
+    requests = None
 
 try:
     import websocket
@@ -50,7 +49,7 @@ except ImportError:
 
 
 # ─────────────────────────────────────────────
-# HTTP: curl_cffi (绕过 TLS/HTTP 指纹检测)
+# HTTP: requests
 # ─────────────────────────────────────────────
 def tcp_check(host: str, port: int, timeout: float = 2) -> bool:
     try:
@@ -125,19 +124,17 @@ def get_app_dir() -> str:
 
 def http_get(port: int, path: str = "/json", timeout: float = 5) -> tuple[int, str]:
     url = f"http://127.0.0.1:{port}{path}"
-    if curl_requests is None:
-        try:
-            with urllib.request.urlopen(url, timeout=timeout) as r:
-                body = r.read().decode("utf-8", errors="replace")
-                return int(r.status), body
-        except Exception as e:
-            return 0, str(e)
+    if requests is None:
+        return 0, "缺少依赖: requests。请运行: pip install requests"
 
     try:
-        r = curl_requests.get(
+        r = requests.get(
             url,
             timeout=timeout,
-            impersonate="chrome",
+            headers={
+                "User-Agent": "Mozilla/5.0 Chrome/120 Safari/537.36",
+                "Accept": "application/json,text/plain,*/*",
+            },
         )
         return r.status_code, r.text
     except Exception as e:

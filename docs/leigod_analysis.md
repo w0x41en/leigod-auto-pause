@@ -360,7 +360,8 @@ invoke("refresh-user-time-info")  # 查看余额
 
 - `main.jsc` 是 bytenode 字节码，无法直接反编译为源码，主进程逻辑只能通过字符串提取推断
 - Chromium 新版对调试端口有安全限制，需要 `--remote-allow-origins=*` 参数
-- 部分 HTTP 客户端连接 `127.0.0.1:9222` 时会被 reset (10054)，可能与客户端的 HTTP 指纹检测有关，`curl_cffi` 的 `impersonate="chrome"` 可能可以绕过
+- 部分 HTTP 客户端连接 `127.0.0.1:9222` 时会被 reset (10054)，可能与客户端的 HTTP 指纹检测有关；当前实现已改为标准 `requests`，必要时会回退到原始 socket 探活
 - 密码加密方式为简单 MD5，无盐值
+
 
 
