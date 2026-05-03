@@ -356,6 +356,13 @@ def _is_accelerating(statuses: set[str]) -> bool:
     return any(status.lower() in {"speeding", "running"} for status in statuses)
 
 
+def _filter_default_platform_processes(names: list[str]) -> list[str]:
+    if len(names) <= 1:
+        return names
+    filtered = [name for name in names if name.lower() != "steam.exe"]
+    return filtered or names
+
+
 def _extract_acc_info_items(value, statuses: set[str], game_ids: set[str]):
     items = value if isinstance(value, list) else [value]
     for item in items:
@@ -521,12 +528,14 @@ def get_acc_snapshot(cdp: CDP) -> dict:
         except Exception:
             pass
 
+    processes = _filter_default_platform_processes(sorted(names, key=str.lower))
+
     return {
         "attached": attached,
         "accelerating": _is_accelerating(statuses),
         "statuses": sorted(statuses, key=str.lower),
         "game_ids": sorted(current_game_ids or game_ids, key=str.lower),
-        "processes": sorted(names, key=str.lower),
+        "processes": processes,
     }
 
 
