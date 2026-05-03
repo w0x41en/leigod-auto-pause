@@ -24,6 +24,7 @@ import subprocess
 import sys
 import time
 import ctypes
+from pathlib import PureWindowsPath
 
 try:
     import requests
@@ -272,6 +273,108 @@ def check_processes(names: set[str]) -> dict[str, bool]:
     return result
 
 
+def _normalize_process_name(value) -> str | None:
+    if not isinstance(value, str):
+        return None
+    value = value.strip().strip('"').strip("'")
+    if not value:
+        return None
+    lower = value.lower()
+    if ".exe" not in lower:
+        return None
+
+    end = lower.find(".exe") + 4
+    candidate = value[:end]
+    for sep in ("\\", "/"):
+        if sep in candidate:
+            candidate = candidate.replace("/", "\\")
+            candidate = PureWindowsPath(candidate).name
+            break
+    candidate = candidate.strip()
+    return candidate if candidate.lower().endswith(".exe") else None
+
+
+def _extract_process_names(value, out: set[str], depth: int = 0):
+    if depth > 8 or value is None:
+        return
+    if isinstance(value, str):
+        name = _normalize_process_name(value)
+        if name:
+            out.add(name)
+        if (value.startswith("{") and value.endswith("}")) or (value.startswith("[") and value.endswith("]")):
+            try:
+                _extract_process_names(json.loads(value), out, depth + 1)
+            except Exception:
+                pass
+        return
+    if isinstance(value, dict):
+        preferred_keys = (
+            "game_process", "platform_process", "process_name", "processName",
+            "exe_name", "exeName", "exe", "process", "launch_path",
+            "launchPath", "manualLaunchPath", "path", "game_path", "gamePath",
+        )
+        for key in preferred_keys:
+            if key in value:
+                _extract_process_names(value.get(key), out, depth + 1)
+        for key, child in value.items():
+            if key not in preferred_keys:
+                _extract_process_names(child, out, depth + 1)
+        return
+    if isinstance(value, list):
+        for item in value:
+            _extract_process_names(item, out, depth + 1)
+
+
+def get_acc_processes(cdp: CDP) -> list[str]:
+    """Best-effort read of process names related to the currently accelerated item.
+
+    This is intentionally read-only: it calls configuration/status-like IPC and
+    inspects renderer localStorage. It does not start, stop, or switch timing.
+    """
+    names: set[str] = set()
+
+    for channel in ("get-acc-config",):
+        try:
+            result = cdp.invoke(channel, timeout=5)
+            if result.get("ok"):
+                _extract_process_names(result.get("data"), names)
+        except Exception:
+            pass
+
+    js = r"""
+    (() => {
+        const out = { localStorage: {}, accLikeGlobals: {} };
+        try {
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (/GAME_LAUNCH_RECORD|ACC|ACCEL|GAME/i.test(key)) {
+                    out.localStorage[key] = localStorage.getItem(key);
+                }
+            }
+        } catch (_) {}
+        try {
+            for (const key of Object.keys(window)) {
+                if (/acc|game|launch/i.test(key) && !/^webpack|^__VUE/.test(key)) {
+                    const value = window[key];
+                    if (value && typeof value === "object") {
+                        try { out.accLikeGlobals[key] = JSON.parse(JSON.stringify(value)); } catch (_) {}
+                    }
+                }
+            }
+        } catch (_) {}
+        return JSON.stringify(out);
+    })()
+    """
+    try:
+        raw = cdp.eval(js, timeout=5)
+        if raw:
+            _extract_process_names(json.loads(raw), names)
+    except Exception:
+        pass
+
+    return sorted(names, key=str.lower)
+
+
 # ─────────────────────────────────────────────
 # 启动 / 连接
 # ─────────────────────────────────────────────
@@ -425,11 +528,13 @@ def load_config(path: str) -> dict:
 # 主监控循环 (支持配置热重载)
 # ─────────────────────────────────────────────
 class WatchState:
-    def __init__(self, processes, interval, show_time, config_path):
+    def __init__(self, processes, interval, show_time, config_path, prefer_acc_processes=True):
         self.processes = processes
         self.interval = interval
         self.show_time = show_time
         self.config_path = config_path
+        self.prefer_acc_processes = prefer_acc_processes
+        self._last_acc_processes: list[str] = []
         self._mtime = self._get_mtime()
 
     def _get_mtime(self):
@@ -449,7 +554,7 @@ class WatchState:
             print(f"  [!] 配置重载失败: {e}")
             return False
 
-        old_p, old_i, old_t = self.processes, self.interval, self.show_time
+        old_p, old_i, old_t, old_pref = self.processes, self.interval, self.show_time, self.prefer_acc_processes
 
         if "watched_processes" in cfg:
             self.processes = cfg["watched_processes"]
@@ -457,15 +562,37 @@ class WatchState:
             self.interval = cfg["check_interval"]
         if "show_time_info" in cfg:
             self.show_time = cfg["show_time_info"]
+        if "prefer_acc_processes" in cfg:
+            self.prefer_acc_processes = bool(cfg["prefer_acc_processes"])
 
-        changed = self.processes != old_p or self.interval != old_i or self.show_time != old_t
+        changed = (
+            self.processes != old_p
+            or self.interval != old_i
+            or self.show_time != old_t
+            or self.prefer_acc_processes != old_pref
+        )
         if changed:
             print(f"\n  [{ts()}] 配置已重载")
             if self.processes != old_p:
                 print(f"          进程: {', '.join(self.processes)} (原: {', '.join(old_p)})")
             if self.interval != old_i:
                 print(f"          间隔: {self.interval}s (原: {old_i}s)")
+            if self.prefer_acc_processes != old_pref:
+                print(f"          优先当前加速进程: {self.prefer_acc_processes}")
         return changed
+
+    def resolve_processes(self, cdp: CDP) -> list[str]:
+        if self.prefer_acc_processes:
+            acc_processes = get_acc_processes(cdp)
+            if acc_processes:
+                if acc_processes != self._last_acc_processes:
+                    print(f"  [{ts()}] 当前加速进程优先: {', '.join(acc_processes)}")
+                    self._last_acc_processes = acc_processes
+                return acc_processes
+            if self._last_acc_processes:
+                print(f"  [{ts()}] 未读到当前加速进程，回退到配置进程")
+                self._last_acc_processes = []
+        return list(self.processes)
 
 
 def monitor(cdp: CDP, state: WatchState):
@@ -474,7 +601,8 @@ def monitor(cdp: CDP, state: WatchState):
     last_check = time.monotonic()
 
     print(f"\n{'='*55}")
-    print(f"  监控: {', '.join(state.processes)}")
+    print(f"  监控: {', '.join(state.processes) if state.processes else '(等待读取当前加速进程)'}")
+    print(f"  优先当前加速进程: {'是' if state.prefer_acc_processes else '否'}")
     print(f"  间隔: {state.interval}s   全关→暂停 | 任一开→保持当前状态")
     print(f"{'='*55}")
     print(f"  Ctrl+C 退出时会尝试暂停计时  |  修改配置文件自动生效\n")
@@ -488,7 +616,11 @@ def monitor(cdp: CDP, state: WatchState):
         if now - last_check >= state.interval:
             last_check = now
             try:
-                names = set(state.processes)
+                resolved_processes = state.resolve_processes(cdp)
+                if not resolved_processes:
+                    print(f"  [{ts()}] 无可用监控进程，跳过本轮")
+                    continue
+                names = set(resolved_processes)
                 status = check_processes(names)
                 any_running = any(status.values())
 
@@ -609,11 +741,12 @@ def main():
     exe = args.exe or cfg.get("leigod_exe", r"C:\Program Files (x86)\LeiGod_Acc\leigod_launcher.exe")
     retries = cfg.get("connect_retries", 5)
     retry_interval = cfg.get("connect_retry_interval", 5)
+    prefer_acc_processes = bool(cfg.get("prefer_acc_processes", True))
 
     if not password:
         mobile = ""
 
-    if not processes:
+    if not processes and not prefer_acc_processes:
         print("[-] 无监控进程! 请在配置文件中设置 watched_processes 或通过命令行指定。")
         sys.exit(1)
 
@@ -621,7 +754,8 @@ def main():
     print("=" * 55)
     print("  雷神加速器 · 进程监控自动暂停")
     print("=" * 55)
-    print(f"  监控: {', '.join(processes)}")
+    print(f"  监控: {', '.join(processes) if processes else '(等待读取当前加速进程)'}")
+    print(f"  优先当前加速进程: {'是' if prefer_acc_processes else '否'}")
     print(f"  间隔: {interval}s")
     print(f"  登录: {'是 (' + mobile + ')' if mobile else '否 (已有登录态)'}")
     print()
@@ -699,7 +833,13 @@ def main():
     signal.signal(signal.SIGINT, on_exit)
     signal.signal(signal.SIGTERM, on_exit)
 
-    state = WatchState(processes, interval, show_time=not args.no_time_info, config_path=config_path)
+    state = WatchState(
+        processes,
+        interval,
+        show_time=not args.no_time_info,
+        config_path=config_path,
+        prefer_acc_processes=prefer_acc_processes,
+    )
     try:
         monitor(cdp, state)
     finally:

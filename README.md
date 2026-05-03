@@ -9,6 +9,7 @@ LeiGod Auto Pause 是一个 Windows 本地自动化工具，用于通过 Electro
 - 自动启动雷神客户端启动器。
 - 通过 `127.0.0.1:9222` 连接 Electron CDP。
 - 调用 `window.leigodSimplify.invoke()` 内部 IPC。
+- 优先读取雷神当前加速对象关联的进程名，并以它作为监控目标。
 - 监控指定进程：任一进程运行则保持当前状态，全部关闭则暂停计时。
 - 支持配置文件热重载。
 - 支持已有登录态，也支持可选自动登录。
@@ -60,6 +61,8 @@ copy .\config\leigod_config.example.yaml .\leigod_config.yaml
 编辑 `leigod_config.yaml`，把 `watched_processes` 改成你要监控的游戏或程序进程名：
 
 ```yaml
+prefer_acc_processes: true
+
 watched_processes:
   - "game.exe"
   - "steam.exe"
@@ -76,6 +79,8 @@ login_country: "86"
 connect_retries: 5
 connect_retry_interval: 5
 ```
+
+`prefer_acc_processes: true` 时，wrapper 会先尝试从雷神当前加速对象读取关联进程名；读不到时再使用 `watched_processes`。这样通常不需要频繁手动修改监控进程，`watched_processes` 主要作为备用列表。
 
 ### 2. 为雷神客户端开启 CDP
 

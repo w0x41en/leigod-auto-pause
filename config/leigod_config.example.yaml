@@ -10,6 +10,10 @@
 #   - "GenshinImpact.exe"
 #   - "LeagueClient.exe"
 
+# 优先使用雷神当前加速对象关联的进程名；读不到时回退到 watched_processes。
+# 如果设为 true，watched_processes 可以留空，但建议保留一个备用列表。
+prefer_acc_processes: true
+
 watched_processes:
   - "notepad.exe"
 
