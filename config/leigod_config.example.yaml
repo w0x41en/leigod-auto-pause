@@ -10,9 +10,9 @@
 #   - "GenshinImpact.exe"
 #   - "LeagueClient.exe"
 
-# 优先使用雷神当前加速对象关联的进程名；仅在检测到当前正在加速时启用。
-# 读不到加速状态或进程名时回退到 watched_processes。
-# 如果设为 true，watched_processes 可以留空，但建议保留一个备用列表。
+# 优先使用雷神当前加速对象关联的进程名；仅在检测到当前正在加速时检测。
+# 未加速或读不到当前加速进程名时跳过本轮，不检测 watched_processes。
+# 如果设为 true，watched_processes 可以留空；设为 false 时才使用 watched_processes。
 prefer_acc_processes: true
 
 watched_processes:

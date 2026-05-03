@@ -80,7 +80,7 @@ connect_retries: 5
 connect_retry_interval: 5
 ```
 
-`prefer_acc_processes: true` 时，wrapper 每轮扫描都会先确认雷神已附加且当前处于加速中，再从当前加速对象读取关联进程名；读不到加速状态或进程名时再使用 `watched_processes`。如果当前加速对象返回多个进程，默认会忽略 `steam.exe` 这类平台常驻进程，避免游戏退出后仍被误判为运行中。
+`prefer_acc_processes: true` 时，wrapper 每轮扫描都会先确认雷神已附加且当前处于加速中，再从当前加速对象读取关联进程名；未加速或读不到当前加速进程名时跳过本轮，不检测 `watched_processes`。如果当前加速对象返回多个进程，默认会忽略 `steam.exe` 这类平台常驻进程，避免游戏退出后仍被误判为运行中。
 
 ### 2. 为雷神客户端开启 CDP
 

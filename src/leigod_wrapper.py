@@ -363,6 +363,16 @@ def _filter_default_platform_processes(names: list[str]) -> list[str]:
     return filtered or names
 
 
+def _normalize_process_list(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if item is not None and str(item).strip()]
+    return []
+
+
 def _extract_acc_info_items(value, statuses: set[str], game_ids: set[str]):
     items = value if isinstance(value, list) else [value]
     for item in items:
@@ -722,7 +732,7 @@ class WatchState:
         old_p, old_i, old_t, old_pref = self.processes, self.interval, self.show_time, self.prefer_acc_processes
 
         if "watched_processes" in cfg:
-            self.processes = cfg["watched_processes"]
+            self.processes = _normalize_process_list(cfg["watched_processes"])
         if "check_interval" in cfg:
             self.interval = cfg["check_interval"]
         if "show_time_info" in cfg:
@@ -759,11 +769,12 @@ class WatchState:
                 self._last_acc_mode = True
                 return acc_processes
 
-            if self._last_acc_mode:
+            if self._last_acc_mode or snapshot["attached"]:
                 status_text = ",".join(snapshot["statuses"]) if snapshot["statuses"] else "unknown"
-                print(f"  [{ts()}] 当前未确认加速中(status={status_text})，使用配置进程")
+                print(f"  [{ts()}] 当前未确认加速中(status={status_text})，跳过检测")
                 self._last_acc_processes = []
                 self._last_acc_mode = False
+            return []
         return list(self.processes)
 
 
@@ -904,7 +915,7 @@ def main():
     else:
         print(f"[!] 配置不存在: {config_path}")
 
-    processes = args.processes or cfg.get("watched_processes", [])
+    processes = _normalize_process_list(args.processes or cfg.get("watched_processes", []))
     interval = args.interval or cfg.get("check_interval", 5)
     mobile = args.mobile or cfg.get("login_mobile", "")
     password = args.password or cfg.get("login_password", "")
