@@ -1,0 +1,31 @@
+# Python / PyInstaller
+__pycache__/
+*.py[cod]
+build/
+dist/
+*.spec.bak
+
+# Local runtime files
+leigod_config.yaml
+*.log
+*.err
+run_*.log
+run_*.err
+leigod_wrapper_admin.log
+
+# Local packaged binaries (publish via GitHub Releases if needed)
+*.exe
+release/*.exe
+
+# Proprietary / extracted third-party application artifacts - do not commit
+private_artifacts/
+_unpacked_app/
+_unpacked_renderer/
+patch_app/
+tmp_profile/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

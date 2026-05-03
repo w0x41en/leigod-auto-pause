@@ -1,0 +1,38 @@
+# 雷神加速器 自动暂停配置
+# ========================
+# watched_processes: 要监控的进程名列表 (不区分大小写)
+#   - 只要列表中任一进程在运行 → 保持当前计时状态
+#   - 列表中所有进程都关闭     → 暂停计时
+#
+# 示例:
+#   - "game.exe"
+#   - "steam.exe"
+#   - "GenshinImpact.exe"
+#   - "LeagueClient.exe"
+
+watched_processes:
+  - "notepad.exe"
+
+# 轮询间隔 (秒)
+check_interval: 60
+
+# 是否在状态切换后打印剩余时间
+show_time_info: true
+
+# 雷神客户端路径
+leigod_exe: "C:\\Program Files (x86)\\LeiGod_Acc\\leigod_launcher.exe"
+
+# 调试端口
+debug_port: 9222
+
+# 登录信息 (留空则不自动登录, 使用已有登录态)
+login_mobile: ""
+login_password: ""
+login_country: "86"
+
+# 连接失败重试次数
+connect_retries: 5
+
+# 连接重试间隔 (秒)
+connect_retry_interval: 5
+
