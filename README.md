@@ -31,12 +31,8 @@ LeiGod Auto Pause 是一个 Windows 本地自动化工具，用于通过 Electro
 ├── docs/
 │   ├── leigod_analysis.md
 │   └── leigod_final_result.md
-└── release/
-    ├── leigod_wrapper.exe          # 本地构建产物，默认不建议提交 Git
-    └── leigod_config.yaml          # 本地运行配置
 ```
 
-`private_artifacts/`、`_unpacked_app/`、`_unpacked_renderer/`、`patch_app/` 等目录属于本地分析/解包产物，已在 `.gitignore` 中排除，不应开源提交。
 
 ## 环境要求
 
