@@ -769,10 +769,16 @@ class WatchState:
                 self._last_acc_mode = True
                 return acc_processes
 
-            if self._last_acc_mode or snapshot["attached"]:
+            if self._last_acc_processes:
+                if self._last_acc_mode:
+                    status_text = ",".join(snapshot["statuses"]) if snapshot["statuses"] else "unknown"
+                    print(f"  [{ts()}] 当前未确认加速中(status={status_text})，继续检测已读取进程: {', '.join(self._last_acc_processes)}")
+                    self._last_acc_mode = False
+                return list(self._last_acc_processes)
+
+            if snapshot["attached"]:
                 status_text = ",".join(snapshot["statuses"]) if snapshot["statuses"] else "unknown"
                 print(f"  [{ts()}] 当前未确认加速中(status={status_text})，跳过检测")
-                self._last_acc_processes = []
                 self._last_acc_mode = False
             return []
         return list(self.processes)
@@ -806,10 +812,12 @@ def monitor(cdp: CDP, state: WatchState):
                 names = set(resolved_processes)
                 status = check_processes(names)
                 any_running = any(status.values())
+                running = [n for n, ok in status.items() if ok]
+                stopped = [n for n, ok in status.items() if not ok]
+                print(f"  [{ts()}] 检测结果: 运行中={', '.join(running) if running else '-'}; 未运行={', '.join(stopped) if stopped else '-'}")
 
                 if any_running:
                     if paused is not False:
-                        running = [n for n, ok in status.items() if ok]
                         print(f"  [{ts()}] 检测到运行中进程: {', '.join(running)}，不执行计时切换")
                     paused = False
 
@@ -817,9 +825,10 @@ def monitor(cdp: CDP, state: WatchState):
                     result = cdp.invoke("pause-user-time")
                     if result.get("ok"):
                         print(f"  [{ts()}] 暂停  所有进程已关闭")
+                        paused = True
                     else:
                         print(f"  [{ts()}] 暂停失败: {result.get('msg') or result.get('detail') or result.get('error')}")
-                    paused = True
+                        paused = None
 
                 if state.show_time and paused is not None:
                     try:
