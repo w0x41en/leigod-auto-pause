@@ -814,21 +814,25 @@ def monitor(cdp: CDP, state: WatchState):
                 any_running = any(status.values())
                 running = [n for n, ok in status.items() if ok]
                 stopped = [n for n, ok in status.items() if not ok]
-                print(f"  [{ts()}] 检测结果: 运行中={', '.join(running) if running else '-'}; 未运行={', '.join(stopped) if stopped else '-'}")
+                print(f"  [{ts()}] 检测目标: {', '.join(resolved_processes)}")
+                print(f"  [{ts()}] 检测结果: {'有运行中进程' if any_running else '全部未运行'}; 运行中={', '.join(running) if running else '无'}; 未运行={', '.join(stopped) if stopped else '无'}")
 
                 if any_running:
                     if paused is not False:
                         print(f"  [{ts()}] 检测到运行中进程: {', '.join(running)}，不执行计时切换")
                     paused = False
 
-                elif not any_running and paused is not True:
-                    result = cdp.invoke("pause-user-time")
-                    if result.get("ok"):
-                        print(f"  [{ts()}] 暂停  所有进程已关闭")
-                        paused = True
+                elif not any_running:
+                    if paused is True:
+                        print(f"  [{ts()}] 已处于暂停状态，未重复发送暂停请求")
                     else:
-                        print(f"  [{ts()}] 暂停失败: {result.get('msg') or result.get('detail') or result.get('error')}")
-                        paused = None
+                        result = cdp.invoke("pause-user-time")
+                        if result.get("ok"):
+                            print(f"  [{ts()}] 暂停  所有进程已关闭")
+                            paused = True
+                        else:
+                            print(f"  [{ts()}] 暂停失败: {result.get('msg') or result.get('detail') or result.get('error')}")
+                            paused = None
 
                 if state.show_time and paused is not None:
                     try:
